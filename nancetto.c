@@ -36,6 +36,7 @@ typedef struct synth_t {
     double lips_reflection;
     double lips_coupling;
     double max_input_pressure;
+    double x_clip;
 
     // live paramaters
     double target_blowing_pressure;
@@ -44,6 +45,11 @@ typedef struct synth_t {
     double vibrato_depth;
     double tremolo_rate;
     double tremolo_depth;
+
+    // flare filter parameters
+    double filter_a;
+    double filter_c;
+    int filter_n;
 
     // private
     double time;
@@ -95,15 +101,38 @@ void synth_run_delay (synth_t *synth, double input) {
     // TODO: run the output through an allpass filter for fractional delay
 }
 
+double flare_impulse_response (double a, double c, int n) {
+
+    return a * exp (c * n);
+}
+
+// TODO smh
+double filter_last = 0;
+
+double flare_filter (double a, double c, int n, double input) {
+
+    // TODO: figure this out lolo
+//    // convolve input with flare impulse response
+//    double output = 0;
+//    for (int i = 0; i < n; i++)
+//        output += flare_impulse_response (a, c, i) * input;
+
+    // TODO: temp 
+    double output = filter_last + (input - filter_last) * 0.1;
+    filter_last = output;
+
+    return output;
+}
+
 double synth_process (synth_t *synth) {
 
     // TODO: optimize low frequency changes out into a "control rate" function
     // smooth transitions...
     synth->blowing_pressure +=
-        0.001 * (synth->target_blowing_pressure - synth->blowing_pressure);
+        0.0025 * (synth->target_blowing_pressure - synth->blowing_pressure);
 
     synth_set_fundamental (synth, 
-        synth->fundamental + 0.001 * (synth->frequency - synth->fundamental));
+        synth->fundamental + 0.005 * (synth->frequency - synth->fundamental));
 
     // vibrato and tremolo
     // TODO: optimize
@@ -122,10 +151,9 @@ double synth_process (synth_t *synth) {
     double reed_input = synth->delay_output - feedback;
     double reed_output = input_pressure * synth->x * synth->x;
     double delay_input = feedback + reed_output;
-    // TODO: reflection filter on the delay_input
-    double filter = delay_input; // TODO this line
+    double filter = flare_filter (synth->filter_a, synth->filter_c, synth->filter_n, delay_input);
     synth_run_delay (synth, filter);
-    double output = filter * synth->gain;
+    double output = (delay_input - filter) * synth->gain;
 
     // the reed mass spring system
     // coupled with delay line
@@ -141,7 +169,7 @@ double synth_process (synth_t *synth) {
     a += k * (input_pressure - reed_input * synth->lips_coupling);
     synth->v += a / synth->rate;
     synth->x += synth->v / synth->rate;
-    synth->x = fmin (1, fmax (-1, synth->x));
+    synth->x = fmin (synth->x_clip, fmax (-synth->x_clip, synth->x));
 
     synth->time += 1 / synth->rate;
 
@@ -155,17 +183,22 @@ synth_t *create_synth (double rate) {
     memset (synth, 0, sizeof (synth_t));
 
     synth->gain = 0.5;
-    synth->noise = 0.01;
+    synth->noise = 0;//0.01;
     synth->stiffness_nonlinear_coefficient = 10;
     synth->stiffness_nonlinear_degree = 5;
     synth->damping_nonlinear_coefficient = 5;
     synth->damping_nonlinear_degree = 1;
     synth->damping = 0.1;
     synth->lips_reflection = 0.5;
-    synth->lips_coupling = 1;
-    synth->max_input_pressure = 1.05;
+    synth->lips_coupling = 0.944882; // 1;
+    synth->max_input_pressure = 1.125;
+    synth->x_clip = 1;
 
-    synth->lips_tension_scaling = 0;
+    synth->filter_a = 0.01;
+    synth->filter_c = 0.1;
+    synth->filter_n = 10;
+
+    synth->lips_tension_scaling = 1.346457;
     synth->target_blowing_pressure = 0;
     synth->blowing_pressure = 0;
 
@@ -174,9 +207,9 @@ synth_t *create_synth (double rate) {
     synth_set_fundamental (synth, synth->frequency);
 
     synth->vibrato_rate = 5;
-    synth->vibrato_depth = 0.01;
+    synth->vibrato_depth = 0;//0.01;
     synth->tremolo_rate = 2;
-    synth->tremolo_depth = 0.01;
+    synth->tremolo_depth = 0;//0.01;
 
     return synth;
 }
@@ -211,20 +244,26 @@ void init_synth (jack_context_t *context, double rate) {
     context->synth = create_synth (rate);
 }
 
+int last_note = 0; // TODO smh
 void note_on (jack_context_t *context, int note, int velocity) {
 
     printf ("NOTE ON  %d, velocity=%d\n", note, velocity);
+    last_note = note;
 
-    double normalized_velocity = velocity / 127.0;
+    //double normalized_velocity = velocity / 127.0;
 
     context->synth->frequency = 440 * pow (2.0, ((note - 69) / 12.0));
-    context->synth->target_blowing_pressure = normalized_velocity;
+    //context->synth->target_blowing_pressure = normalized_velocity;
+    context->synth->target_blowing_pressure = 1;
 }
 
 void note_off (jack_context_t *context, int note, int velocity) {
 
     printf ("NOTE OFF %d, velocity=%d\n", note, velocity);
-    context->synth->target_blowing_pressure = 0;
+    if (note == last_note) {
+        context->synth->target_blowing_pressure = 0;
+        last_note = 0;
+    }
 }
 
 void cc (jack_context_t *context, int controller, int value) {
@@ -236,11 +275,41 @@ void cc (jack_context_t *context, int controller, int value) {
     switch (controller) {
 
         case 21: // breath control TODO: actual midi breath controller cc
-            context->synth->target_blowing_pressure = context->synth->blowing_pressure = normalized_value;
+            if (last_note == 0) break; // TODO smh
+            context->synth->target_blowing_pressure =
+            context->synth->blowing_pressure = normalized_value *
+            context->synth->max_input_pressure;
             break;
 
         case 22: // lips tension
             synth_set_lips_tension_scaling (context->synth, normalized_value * 3);
+            printf ("tension scaling: %lf\n", context->synth->lips_tension_scaling);
+            break;
+
+        case 23:
+            context->synth->stiffness_nonlinear_coefficient = normalized_value * 100;
+            printf ("stiffness nonlinear coefficient: %lf\n",
+            context->synth->stiffness_nonlinear_coefficient);
+            break;
+
+        case 24:
+            context->synth->stiffness_nonlinear_degree = value;
+            printf ("stiffness nonlinear degree: %lf\n", context->synth->stiffness_nonlinear_degree);
+            break;
+
+        case 25:
+            context->synth->lips_coupling = normalized_value * 2;
+            printf ("coupling: %lf\n", context->synth->lips_coupling);
+            break;
+
+        case 26:
+            context->synth->vibrato_depth = normalized_value / 2;
+            printf ("vibrato: %lf\n", context->synth->vibrato_depth);
+            break;
+
+        case 27:
+            context->synth->tremolo_depth = normalized_value;
+            printf ("tremolo: %lf\n", context->synth->tremolo_depth);
             break;
     }
 }
