@@ -38,6 +38,7 @@ typedef struct synth_t {
     double max_input_pressure;
 
     // live paramaters
+    double target_blowing_pressure;
     double blowing_pressure;
     double vibrato_rate;
     double vibrato_depth;
@@ -47,7 +48,8 @@ typedef struct synth_t {
     // private
     double time;
     double rate;
-    double fundamental;
+    double frequency; // target
+    double fundamental; // current bore frequency
     double stiffness;
     double lips_tension_scaling; // scales actual lips tension on log scale
 
@@ -96,6 +98,12 @@ void synth_run_delay (synth_t *synth, double input) {
 double synth_process (synth_t *synth) {
 
     // TODO: optimize low frequency changes out into a "control rate" function
+    // smooth transitions...
+    synth->blowing_pressure +=
+        0.001 * (synth->target_blowing_pressure - synth->blowing_pressure);
+
+    synth_set_fundamental (synth, 
+        synth->fundamental + 0.001 * (synth->frequency - synth->fundamental));
 
     // vibrato and tremolo
     // TODO: optimize
@@ -158,10 +166,12 @@ synth_t *create_synth (double rate) {
     synth->max_input_pressure = 1.05;
 
     synth->lips_tension_scaling = 0;
-    synth->blowing_pressure = 1;
+    synth->target_blowing_pressure = 0;
+    synth->blowing_pressure = 0;
 
     synth->rate = rate;
-    synth_set_fundamental (synth, 164.81 / 2);
+    synth->frequency = 164.81 / 2;
+    synth_set_fundamental (synth, synth->frequency);
 
     synth->vibrato_rate = 5;
     synth->vibrato_depth = 0.01;
@@ -201,13 +211,47 @@ void init_synth (jack_context_t *context, double rate) {
     context->synth = create_synth (rate);
 }
 
+void note_on (jack_context_t *context, int note, int velocity) {
+
+    printf ("NOTE ON  %d, velocity=%d\n", note, velocity);
+
+    double normalized_velocity = velocity / 127.0;
+
+    context->synth->frequency = 440 * pow (2.0, ((note - 69) / 12.0));
+    context->synth->target_blowing_pressure = normalized_velocity;
+}
+
+void note_off (jack_context_t *context, int note, int velocity) {
+
+    printf ("NOTE OFF %d, velocity=%d\n", note, velocity);
+    context->synth->target_blowing_pressure = 0;
+}
+
+void cc (jack_context_t *context, int controller, int value) {
+
+    printf ("CC       %d, value=%d\n", controller, value);
+
+    double normalized_value = value / 127.0;
+
+    switch (controller) {
+
+        case 21: // breath control TODO: actual midi breath controller cc
+            context->synth->target_blowing_pressure = context->synth->blowing_pressure = normalized_value;
+            break;
+
+        case 22: // lips tension
+            synth_set_lips_tension_scaling (context->synth, normalized_value * 3);
+            break;
+    }
+}
+
 int jack_process (jack_nframes_t n_frames, void *arg) {
 
     jack_context_t *context = (jack_context_t *) arg;
 
 	jack_default_audio_sample_t *output =
         (jack_default_audio_sample_t *) jack_port_get_buffer (context->output_port, n_frames);
-	void *midi_buffer = jack_port_get_buffer (input_port, nframes);
+	void *midi_buffer = jack_port_get_buffer (context->input_port, n_frames);
 	jack_nframes_t n_events = jack_midi_get_event_count (midi_buffer);
 
     // process midi inputs
@@ -218,16 +262,31 @@ int jack_process (jack_nframes_t n_frames, void *arg) {
         jack_midi_event_get (&event, midi_buffer, i);
         jack_midi_data_t *buffer = event.buffer;
         int command = buffer[0] & 0xf0;
-        int channel = buffer[0] & 0x0f;
+        //int channel = buffer[0] & 0x0f;
 
-        printf ("got midi message 0x%x on channel 0x%x\n", command, channel);
+        //printf ("got midi message 0x%x on channel 0x%x\n", command, channel);
+
+        switch (command) {
+
+            case 0x90: // note on
+                note_on (context, buffer[1], buffer[2]);
+                break;
+
+            case 0x80: // note off
+                note_off (context, buffer[1], buffer[2]);
+                break;
+
+            case 0xb0: // cc
+                cc (context, buffer[1], buffer[2]);
+                break;
+        }
     }
 
     // process audio out
     for (int i = 0; i < n_frames; i++)
         output[i] = synth_process (context->synth);
 
-	return 0;
+    return 0;
 }
 
 int jack_set_rate (jack_nframes_t rate, void *arg) {
