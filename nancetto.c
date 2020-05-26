@@ -68,6 +68,9 @@ typedef struct synth_t {
     double x;   // mass displacement
     double v;   // mass velocity
 
+    double filter_last;
+    double last_out;
+
 } synth_t;
 
 void synth_update_stiffness (synth_t *synth) {
@@ -106,10 +109,7 @@ double flare_impulse_response (double a, double c, int n) {
     return a * exp (c * n);
 }
 
-// TODO smh
-double filter_last = 0;
-
-double flare_filter (double a, double c, int n, double input) {
+double flare_filter (synth_t *synth, double input) {
 
     // TODO: figure this out lolo
 //    // convolve input with flare impulse response
@@ -118,13 +118,13 @@ double flare_filter (double a, double c, int n, double input) {
 //        output += flare_impulse_response (a, c, i) * input;
 
     // TODO: temp 
-    double output = filter_last + (input - filter_last) * 0.1;
-    filter_last = output;
+    double output = synth->filter_last + (input - synth->filter_last) * 0.1;
+    synth->filter_last = output;
 
     return output;
 }
 
-double synth_process (synth_t *synth) {
+double synth_process (synth_t *synth, double external_feedback) {
 
     // TODO: optimize low frequency changes out into a "control rate" function
     // smooth transitions...
@@ -150,8 +150,8 @@ double synth_process (synth_t *synth) {
     double feedback = synth->lips_reflection * synth->delay_output;
     double reed_input = synth->delay_output - feedback;
     double reed_output = input_pressure * synth->x * synth->x;
-    double delay_input = feedback + reed_output;
-    double filter = flare_filter (synth->filter_a, synth->filter_c, synth->filter_n, delay_input);
+    double delay_input = feedback + reed_output + external_feedback;
+    double filter = flare_filter (synth, delay_input);
     synth_run_delay (synth, filter);
     double output = (delay_input - filter) * synth->gain;
 
@@ -172,6 +172,7 @@ double synth_process (synth_t *synth) {
     synth->x = fmin (synth->x_clip, fmax (-synth->x_clip, synth->x));
 
     synth->time += 1 / synth->rate;
+    synth->last_out = output;
 
     // TODO: dc blocker...
     return output;
@@ -198,6 +199,7 @@ synth_t *create_synth (double rate) {
     synth->filter_c = 0.1;
     synth->filter_n = 10;
 
+    //synth->lips_tension_scaling = 2.102362;
     synth->lips_tension_scaling = 1.346457;
     synth->target_blowing_pressure = 0;
     synth->blowing_pressure = 0;
@@ -209,7 +211,7 @@ synth_t *create_synth (double rate) {
     synth->vibrato_rate = 5;
     synth->vibrato_depth = 0;//0.01;
     synth->tremolo_rate = 2;
-    synth->tremolo_depth = 0;//0.01;
+    synth->tremolo_depth = 0.007874;//0.01;
 
     return synth;
 }
@@ -223,50 +225,89 @@ void destroy_synth (synth_t *synth) {
 
 // MAIN N AUDIO INTERFACE N STUFF
 
+#define N_VOICES 4
+
 typedef struct jack_context_t {
 
     jack_client_t *client;
     jack_port_t *input_port;
     jack_port_t *output_port;
-    synth_t *synth;
+    synth_t *synths[N_VOICES];
+    int notes[N_VOICES];
 
 } jack_context_t;
 
-void init_synth (jack_context_t *context, double rate) {
+void init_synths (jack_context_t *context, double rate) {
 
-    if (context->synth != NULL) {
+    for (int i = 0; i < N_VOICES; i++) {
 
-        puts ("destroying old synth");
-        destroy_synth (context->synth);
+        if (context->synths[i] != NULL) {
+
+            puts ("destroying old synth");
+            destroy_synth (context->synths[i]);
+        }
+
+        printf ("initing synth #%d with rate %lf\n", i, rate);
+        context->synths[i] = create_synth (rate);
     }
-
-    printf ("initing synth with rate %lf\n", rate);
-    context->synth = create_synth (rate);
 }
 
-int last_note = 0; // TODO smh
-void note_on (jack_context_t *context, int note, int velocity) {
+synth_t *allocate_voice (jack_context_t *context, int note) {
+
+    printf ("allocating voice to note %d\n", note);
+
+    for (int i = 0; i < N_VOICES; i++) {
+        if (context->notes[i] == 0) {
+            printf ("assigning note %d to voice %d\n", note, i);
+            context->notes[i] = note;
+            return context->synths[i];
+        }
+    }
+    puts ("NO FREE VOICES");
+    // not any free voices?
+    return NULL;
+}
+
+synth_t *unallocate_voice (jack_context_t *context, int note) {
+
+    printf ("unallocating voice from note %d\n", note);
+
+    for (int i = 0; i < N_VOICES; i++) {
+        if (context->notes[i] == note) {
+            printf ("UNassigning note %d from voice %d\n", note, i);
+            context->notes[i] = 0;
+            return context->synths[i];
+        }
+    }
+    puts ("no voices had that note");
+    // not any free voices?
+    return NULL;
+}
+
+void note_on (synth_t *synth, int note, int velocity) {
+
+    if (synth == NULL)
+        return;
 
     printf ("NOTE ON  %d, velocity=%d\n", note, velocity);
-    last_note = note;
 
     //double normalized_velocity = velocity / 127.0;
 
-    context->synth->frequency = 440 * pow (2.0, ((note - 69) / 12.0));
-    //context->synth->target_blowing_pressure = normalized_velocity;
-    context->synth->target_blowing_pressure = 1;
+    synth->frequency = 440 * pow (2.0, ((note - 69) / 12.0));
+    //synth->target_blowing_pressure = normalized_velocity;
+    synth->target_blowing_pressure = 1;
 }
 
-void note_off (jack_context_t *context, int note, int velocity) {
+void note_off (synth_t *synth, int note, int velocity) {
+
+    if (synth == NULL)
+        return;
 
     printf ("NOTE OFF %d, velocity=%d\n", note, velocity);
-    if (note == last_note) {
-        context->synth->target_blowing_pressure = 0;
-        last_note = 0;
-    }
+    synth->target_blowing_pressure = 0;
 }
 
-void cc (jack_context_t *context, int controller, int value) {
+void cc (synth_t *synth, int controller, int value) {
 
     printf ("CC       %d, value=%d\n", controller, value);
 
@@ -275,41 +316,40 @@ void cc (jack_context_t *context, int controller, int value) {
     switch (controller) {
 
         case 21: // breath control TODO: actual midi breath controller cc
-            if (last_note == 0) break; // TODO smh
-            context->synth->target_blowing_pressure =
-            context->synth->blowing_pressure = normalized_value *
-            context->synth->max_input_pressure;
+            synth->target_blowing_pressure =
+            synth->blowing_pressure = normalized_value *
+            synth->max_input_pressure;
             break;
 
         case 22: // lips tension
-            synth_set_lips_tension_scaling (context->synth, normalized_value * 3);
-            printf ("tension scaling: %lf\n", context->synth->lips_tension_scaling);
+            synth_set_lips_tension_scaling (synth, normalized_value * 3);
+            printf ("tension scaling: %lf\n", synth->lips_tension_scaling);
             break;
 
         case 23:
-            context->synth->stiffness_nonlinear_coefficient = normalized_value * 100;
+            synth->stiffness_nonlinear_coefficient = normalized_value * 100;
             printf ("stiffness nonlinear coefficient: %lf\n",
-            context->synth->stiffness_nonlinear_coefficient);
+            synth->stiffness_nonlinear_coefficient);
             break;
 
         case 24:
-            context->synth->stiffness_nonlinear_degree = value;
-            printf ("stiffness nonlinear degree: %lf\n", context->synth->stiffness_nonlinear_degree);
+            synth->stiffness_nonlinear_degree = value;
+            printf ("stiffness nonlinear degree: %lf\n", synth->stiffness_nonlinear_degree);
             break;
 
         case 25:
-            context->synth->lips_coupling = normalized_value * 2;
-            printf ("coupling: %lf\n", context->synth->lips_coupling);
+            synth->lips_coupling = normalized_value * 2;
+            printf ("coupling: %lf\n", synth->lips_coupling);
             break;
 
         case 26:
-            context->synth->vibrato_depth = normalized_value / 2;
-            printf ("vibrato: %lf\n", context->synth->vibrato_depth);
+            synth->vibrato_depth = normalized_value / 2;
+            printf ("vibrato: %lf\n", synth->vibrato_depth);
             break;
 
         case 27:
-            context->synth->tremolo_depth = normalized_value;
-            printf ("tremolo: %lf\n", context->synth->tremolo_depth);
+            synth->tremolo_depth = normalized_value;
+            printf ("tremolo: %lf\n", synth->tremolo_depth);
             break;
     }
 }
@@ -338,22 +378,31 @@ int jack_process (jack_nframes_t n_frames, void *arg) {
         switch (command) {
 
             case 0x90: // note on
-                note_on (context, buffer[1], buffer[2]);
+                note_on (allocate_voice (context, buffer[1]), buffer[1], buffer[2]);
                 break;
 
             case 0x80: // note off
-                note_off (context, buffer[1], buffer[2]);
+                note_off (unallocate_voice (context, buffer[1]), buffer[1], buffer[2]);
                 break;
 
             case 0xb0: // cc
-                cc (context, buffer[1], buffer[2]);
+                for (int j = 0; j < N_VOICES; j++)
+                    cc (context->synths[j], buffer[1], buffer[2]);
                 break;
         }
     }
 
     // process audio out
-    for (int i = 0; i < n_frames; i++)
-        output[i] = synth_process (context->synth);
+    for (int i = 0; i < n_frames; i++) {
+        output[i] = 0;
+
+        // TODO: have separate jack outputs for the different voices
+        for (int j = 0; j < N_VOICES; j++)
+            output[i] += synth_process (context->synths[j], 0);
+
+        // clipping....
+        output[i] = fmin (1, fmax (-1, output[i]));
+    }
 
     return 0;
 }
@@ -361,7 +410,7 @@ int jack_process (jack_nframes_t n_frames, void *arg) {
 int jack_set_rate (jack_nframes_t rate, void *arg) {
 
     printf ("jack has update the rate to %d\n", rate);
-    init_synth (arg, rate);
+    init_synths (arg, rate);
 	return 0;
 }
 
@@ -376,7 +425,7 @@ int main (int argc, char **argv) {
     srand (SRAND_SEED);
 
     jack_context_t context;
-    context.synth = NULL;
+    memset (&context, 0, sizeof (jack_context_t));
 
 	if ((context.client = jack_client_open ("nancetto", JackNullOption, NULL)) == 0) {
 		fprintf (stderr, "could not connect to jack server\n");
@@ -399,7 +448,9 @@ int main (int argc, char **argv) {
 	while (1)
 		sleep(1);
 
-    destroy_synth (context.synth);
-	jack_client_close (context.client);
+    for (int i = 0; i < N_VOICES; i++)
+        destroy_synth (context.synths[i]);
+
+    jack_client_close (context.client);
     return EXIT_SUCCESS;
 }
