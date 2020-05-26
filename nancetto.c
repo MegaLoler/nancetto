@@ -4,7 +4,7 @@
 #include <string.h>
 #include <sndfile.h>
 
-#define MAX_SAMPLE_DELAY 1024
+#define MAX_SAMPLE_DELAY 4096
 #define SRAND_SEED 123487
 
 
@@ -92,8 +92,8 @@ void synth_run_delay (synth_t *synth, double input) {
 
 double synth_process (synth_t *synth) {
 
-    // TODO: temp
-    synth_set_lips_tension_scaling (synth, synth->time);
+    //TODO tmep
+//    synth_set_lips_tension_scaling (synth, synth->time / 2 + 1);
 
     // TODO: optimize low frequency changes out into a "control rate" function
 
@@ -148,25 +148,25 @@ synth_t *create_synth (double rate) {
 
     synth->gain = 0.5;
     synth->noise = 0.005;
-    synth->stiffness_nonlinear_coefficient = 2;
+    synth->stiffness_nonlinear_coefficient = 10;
     synth->stiffness_nonlinear_degree = 10;
     synth->damping_nonlinear_coefficient = 5;
     synth->damping_nonlinear_degree = 1;
     synth->damping = 0.1;
     synth->lips_reflection = 0.5;
-    synth->lips_coupling = 0.5;
-    synth->max_input_pressure = 1.25;
+    synth->lips_coupling = 1;
+    synth->max_input_pressure = 1.05;
 
-    synth->lips_tension_scaling = 0;
-    synth->blowing_pressure = 0.75;
+    synth->lips_tension_scaling = 2;
+    synth->blowing_pressure = 1;
 
     synth->rate = rate;
     synth_set_fundamental (synth, 174.61 / 2);
 
     synth->vibrato_rate = 5;
-    synth->vibrato_depth = 0.05;
+    synth->vibrato_depth = 0.01;
     synth->tremolo_rate = 2;
-    synth->tremolo_depth = 0.05;
+    synth->tremolo_depth = 0.01;
 
     return synth;
 }
