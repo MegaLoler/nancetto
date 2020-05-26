@@ -97,61 +97,83 @@ double synth_process (synth_t *synth) {
     // TODO: this is also tump
     double target_pressure = 0;
     double target_scaling = 0;
-    int tick = (int) (synth->time * 6);
+    int tick = (int) (synth->time * 12);
     switch (tick) {
         case 0:
         case 1:
         case 2:
-            target_pressure = 1;
-            target_scaling = 1;
-            break;
         case 3:
-            target_pressure = 0;
-            target_scaling = 1;
-            break;
-
         case 4:
-            target_pressure = 1;
-            target_scaling = 1.583;
-            break;
         case 5:
-            target_pressure = 0;
-            target_scaling = 1.583;
+            target_pressure = 1;
+            target_scaling = 1;
             break;
         case 6:
-            target_pressure = 1;
-            target_scaling = 1.583;
-            break;
         case 7:
             target_pressure = 0;
-            target_scaling = 1.583;
+            target_scaling = 1;
             break;
 
         case 8:
-            target_pressure = 1;
-            target_scaling = 2;
-            break;
         case 9:
-            target_pressure = 0;
-            target_scaling = 2;
-            break;
-        case 10:
             target_pressure = 1;
             target_scaling = 1.583;
             break;
+        case 10:
         case 11:
             target_pressure = 0;
             target_scaling = 1.583;
             break;
-
         case 12:
+            target_pressure = 1;
+            target_scaling = 1.583;
+            break;
         case 13:
+            target_pressure = 0;
+            target_scaling = 1.583;
+            break;
+        case 14:
+            target_pressure = 1;
+            target_scaling = 1.583;
+            break;
+        case 15:
+            target_pressure = 0;
+            target_scaling = 1.583;
+            break;
+
+        case 16:
+        case 17:
+            target_pressure = 1;
+            target_scaling = 2;
+            break;
+        case 18:
+        case 19:
+            target_pressure = 0;
+            target_scaling = 2;
+            break;
+        case 20:
+        case 21:
+            target_pressure = 1;
+            target_scaling = 1.583;
+            break;
+        case 22:
+        case 23:
+            target_pressure = 0;
+            target_scaling = 1.583;
+            break;
+
+        case 24:
+        case 25:
+        case 26:
+        case 27:
+        case 28:
+        case 29:
             target_pressure = 1;
             target_scaling = 1;
             break;
 
-        case 14:
-        case 15:
+        case 30:
+        case 31:
             target_pressure = 0;
             target_scaling = 1;
             break;
@@ -227,7 +249,7 @@ synth_t *create_synth (double rate) {
     synth->blowing_pressure = 1;
 
     synth->rate = rate;
-    synth_set_fundamental (synth, 174.61 / 4);
+    synth_set_fundamental (synth, 164.81 / 2);
 
     synth->vibrato_rate = 5;
     synth->vibrato_depth = 0.01;
