@@ -2,7 +2,10 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
-#include <sndfile.h>
+#include <unistd.h>
+
+#include <jack/jack.h>
+#include <jack/midiport.h>
 
 #define MAX_SAMPLE_DELAY 4096
 #define SRAND_SEED 123487
@@ -92,97 +95,6 @@ void synth_run_delay (synth_t *synth, double input) {
 
 double synth_process (synth_t *synth) {
 
-    //TODO tmep
-//    synth_set_lips_tension_scaling (synth, synth->time / 2);
-    // TODO: this is also tump
-    double target_pressure = 0;
-    double target_scaling = 0;
-    int tick = (int) (synth->time * 12);
-    switch (tick) {
-        case 0:
-        case 1:
-        case 2:
-        case 3:
-        case 4:
-        case 5:
-            target_pressure = 1;
-            target_scaling = 1;
-            break;
-        case 6:
-        case 7:
-            target_pressure = 0;
-            target_scaling = 1;
-            break;
-
-        case 8:
-        case 9:
-            target_pressure = 1;
-            target_scaling = 1.583;
-            break;
-        case 10:
-        case 11:
-            target_pressure = 0;
-            target_scaling = 1.583;
-            break;
-        case 12:
-            target_pressure = 1;
-            target_scaling = 1.583;
-            break;
-        case 13:
-            target_pressure = 0;
-            target_scaling = 1.583;
-            break;
-        case 14:
-            target_pressure = 1;
-            target_scaling = 1.583;
-            break;
-        case 15:
-            target_pressure = 0;
-            target_scaling = 1.583;
-            break;
-
-        case 16:
-        case 17:
-            target_pressure = 1;
-            target_scaling = 2;
-            break;
-        case 18:
-        case 19:
-            target_pressure = 0;
-            target_scaling = 2;
-            break;
-        case 20:
-        case 21:
-            target_pressure = 1;
-            target_scaling = 1.583;
-            break;
-        case 22:
-        case 23:
-            target_pressure = 0;
-            target_scaling = 1.583;
-            break;
-
-        case 24:
-        case 25:
-        case 26:
-        case 27:
-        case 28:
-        case 29:
-            target_pressure = 1;
-            target_scaling = 1;
-            break;
-
-        case 30:
-        case 31:
-            target_pressure = 0;
-            target_scaling = 1;
-            break;
-    }
-    synth->blowing_pressure += 0.005 * (target_pressure - synth->blowing_pressure);
-    double scaling = synth->lips_tension_scaling + 0.005 * (target_scaling -
-    synth->lips_tension_scaling);
-    synth_set_lips_tension_scaling (synth, scaling);
-
     // TODO: optimize low frequency changes out into a "control rate" function
 
     // vibrato and tremolo
@@ -266,39 +178,100 @@ void destroy_synth (synth_t *synth) {
 
 
 
-// MAIN N STUFF
+// MAIN N AUDIO INTERFACE N STUFF
+
+typedef struct jack_context_t {
+
+    jack_client_t *client;
+    jack_port_t *input_port;
+    jack_port_t *output_port;
+    synth_t *synth;
+
+} jack_context_t;
+
+void init_synth (jack_context_t *context, double rate) {
+
+    if (context->synth != NULL) {
+
+        puts ("destroying old synth");
+        destroy_synth (context->synth);
+    }
+
+    printf ("initing synth with rate %lf\n", rate);
+    context->synth = create_synth (rate);
+}
+
+int jack_process (jack_nframes_t n_frames, void *arg) {
+
+    jack_context_t *context = (jack_context_t *) arg;
+
+	jack_default_audio_sample_t *output =
+        (jack_default_audio_sample_t *) jack_port_get_buffer (context->output_port, n_frames);
+	void *midi_buffer = jack_port_get_buffer (input_port, nframes);
+	jack_nframes_t n_events = jack_midi_get_event_count (midi_buffer);
+
+    // process midi inputs
+    // TODO: make them not batched into audio buffer?
+    for (int i = 0; i < n_events; i++) {
+
+    	jack_midi_event_t event;
+        jack_midi_event_get (&event, midi_buffer, i);
+        jack_midi_data_t *buffer = event.buffer;
+        int command = buffer[0] & 0xf0;
+        int channel = buffer[0] & 0x0f;
+
+        printf ("got midi message 0x%x on channel 0x%x\n", command, channel);
+    }
+
+    // process audio out
+    for (int i = 0; i < n_frames; i++)
+        output[i] = synth_process (context->synth);
+
+	return 0;
+}
+
+int jack_set_rate (jack_nframes_t rate, void *arg) {
+
+    printf ("jack has update the rate to %d\n", rate);
+    init_synth (arg, rate);
+	return 0;
+}
+
+void jack_shutdown (void *arg) {
+
+    fprintf (stderr, "jack SHUTDOWN on us!!\n");
+	exit (EXIT_FAILURE);
+}
 
 int main (int argc, char **argv) {
 
     srand (SRAND_SEED);
 
-    const int rate = 48000;
-    const double render_time = 4; // seconds
-    const int n_samples = rate * render_time; // samples to render
+    jack_context_t context;
+    context.synth = NULL;
 
-    synth_t *synth = create_synth (rate);
+	if ((context.client = jack_client_open ("nancetto", JackNullOption, NULL)) == 0) {
+		fprintf (stderr, "could not connect to jack server\n");
+		return EXIT_FAILURE;
+	}
 
-    // render
-    printf ("rendering %lf seconds @ %d hz...\n", render_time, rate);
-    float buffer[n_samples];
-    for (int i = 0; i < n_samples; i++)
-        buffer[i] = (float) synth_process (synth);
+    //init_synth (&context, jack_get_sample_rate (context.client));
+	jack_set_process_callback (context.client, jack_process, &context);
+	jack_set_sample_rate_callback (context.client, jack_set_rate, &context);
+	jack_on_shutdown (context.client, jack_shutdown, &context);
 
-    // write to file
-    puts ("opening file...");
-    SF_INFO sfinfo;
-    sfinfo.samplerate = rate;
-    sfinfo.channels = 1;
-    sfinfo.format = SF_FORMAT_WAV | SF_FORMAT_PCM_32;
-    SNDFILE *sf = sf_open ("out.wav", SFM_WRITE, &sfinfo);
-    if (sf == NULL)
-        fprintf (stderr, "Could not open output file: %s", sf_strerror (sf));
+	context.input_port = jack_port_register (context.client, "midi_in", JACK_DEFAULT_MIDI_TYPE, JackPortIsInput, 0);
+	context.output_port = jack_port_register (context.client, "audio_out", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0);
 
-    puts ("writing file...");
-    sf_write_float (sf, buffer, n_samples);
+	if (jack_activate (context.client)) {
+		fprintf (stderr, "cannot activate jack client");
+		return EXIT_FAILURE;
+	}
 
-    puts ("done; cleanin up");
-    destroy_synth (synth);
+	while (1)
+		sleep(1);
 
+    destroy_synth (context.synth);
+	jack_client_close (context.client);
     return EXIT_SUCCESS;
 }
