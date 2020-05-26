@@ -93,7 +93,73 @@ void synth_run_delay (synth_t *synth, double input) {
 double synth_process (synth_t *synth) {
 
     //TODO tmep
-//    synth_set_lips_tension_scaling (synth, synth->time / 2 + 1);
+//    synth_set_lips_tension_scaling (synth, synth->time / 2);
+    // TODO: this is also tump
+    double target_pressure = 0;
+    double target_scaling = 0;
+    int tick = (int) (synth->time * 6);
+    switch (tick) {
+        case 0:
+        case 1:
+        case 2:
+            target_pressure = 1;
+            target_scaling = 1;
+            break;
+        case 3:
+            target_pressure = 0;
+            target_scaling = 1;
+            break;
+
+        case 4:
+            target_pressure = 1;
+            target_scaling = 1.583;
+            break;
+        case 5:
+            target_pressure = 0;
+            target_scaling = 1.583;
+            break;
+        case 6:
+            target_pressure = 1;
+            target_scaling = 1.583;
+            break;
+        case 7:
+            target_pressure = 0;
+            target_scaling = 1.583;
+            break;
+
+        case 8:
+            target_pressure = 1;
+            target_scaling = 2;
+            break;
+        case 9:
+            target_pressure = 0;
+            target_scaling = 2;
+            break;
+        case 10:
+            target_pressure = 1;
+            target_scaling = 1.583;
+            break;
+        case 11:
+            target_pressure = 0;
+            target_scaling = 1.583;
+            break;
+
+        case 12:
+        case 13:
+            target_pressure = 1;
+            target_scaling = 1;
+            break;
+
+        case 14:
+        case 15:
+            target_pressure = 0;
+            target_scaling = 1;
+            break;
+    }
+    synth->blowing_pressure += 0.005 * (target_pressure - synth->blowing_pressure);
+    double scaling = synth->lips_tension_scaling + 0.005 * (target_scaling -
+    synth->lips_tension_scaling);
+    synth_set_lips_tension_scaling (synth, scaling);
 
     // TODO: optimize low frequency changes out into a "control rate" function
 
@@ -147,9 +213,9 @@ synth_t *create_synth (double rate) {
     memset (synth, 0, sizeof (synth_t));
 
     synth->gain = 0.5;
-    synth->noise = 0.005;
+    synth->noise = 0.01;
     synth->stiffness_nonlinear_coefficient = 10;
-    synth->stiffness_nonlinear_degree = 10;
+    synth->stiffness_nonlinear_degree = 5;
     synth->damping_nonlinear_coefficient = 5;
     synth->damping_nonlinear_degree = 1;
     synth->damping = 0.1;
@@ -157,11 +223,11 @@ synth_t *create_synth (double rate) {
     synth->lips_coupling = 1;
     synth->max_input_pressure = 1.05;
 
-    synth->lips_tension_scaling = 2;
+    synth->lips_tension_scaling = 0;
     synth->blowing_pressure = 1;
 
     synth->rate = rate;
-    synth_set_fundamental (synth, 174.61 / 2);
+    synth_set_fundamental (synth, 174.61 / 4);
 
     synth->vibrato_rate = 5;
     synth->vibrato_depth = 0.01;
