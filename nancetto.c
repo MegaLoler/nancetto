@@ -225,7 +225,7 @@ void destroy_synth (synth_t *synth) {
 
 // MAIN N AUDIO INTERFACE N STUFF
 
-#define N_VOICES 4
+#define N_VOICES 1
 
 typedef struct jack_context_t {
 
@@ -252,22 +252,6 @@ void init_synths (jack_context_t *context, double rate) {
     }
 }
 
-synth_t *allocate_voice (jack_context_t *context, int note) {
-
-    printf ("allocating voice to note %d\n", note);
-
-    for (int i = 0; i < N_VOICES; i++) {
-        if (context->notes[i] == 0) {
-            printf ("assigning note %d to voice %d\n", note, i);
-            context->notes[i] = note;
-            return context->synths[i];
-        }
-    }
-    puts ("NO FREE VOICES");
-    // not any free voices?
-    return NULL;
-}
-
 synth_t *unallocate_voice (jack_context_t *context, int note) {
 
     printf ("unallocating voice from note %d\n", note);
@@ -282,6 +266,28 @@ synth_t *unallocate_voice (jack_context_t *context, int note) {
     puts ("no voices had that note");
     // not any free voices?
     return NULL;
+}
+
+int last_allocated = 0;
+synth_t *allocate_voice (jack_context_t *context, int note) {
+
+    printf ("allocating voice to note %d\n", note);
+
+    for (int i = 0; i < N_VOICES; i++) {
+        if (context->notes[i] == 0) {
+            printf ("assigning note %d to voice %d\n", note, i);
+            context->notes[i] = note;
+            last_allocated = i;
+            return context->synths[i];
+        }
+    }
+    puts ("NO FREE VOICES");
+    printf ("REallocating then voice %d", last_allocated);
+    synth_t *voice = unallocate_voice (context, context->notes[last_allocated]);
+    context->notes[last_allocated] = note;
+    return voice;
+    //// not any free voices?
+    //return NULL;
 }
 
 void note_on (synth_t *synth, int note, int velocity) {
